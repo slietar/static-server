@@ -1,8 +1,11 @@
 import * as idbKeyval from 'https://cdn.skypack.dev/idb-keyval';
 
+const store = idbKeyval.createStore('_static-server', 'store');
+
 
 self.addEventListener('fetch', function (event) {
   let url = new URL(event.request.url);
+  let referrer = event.request.referrer && new URL(event.request.referrer);
 
   if (url.origin === 'https://cdn.skypack.dev') {
     event.respondWith(
@@ -19,28 +22,35 @@ self.addEventListener('fetch', function (event) {
       }),
     );
   } else if (url.origin === location.origin) {
-    console.log(event.request.referrer, 'requests', url.pathname);
+    // console.log(referrer?.pathname + ' [requests] ' + url.pathname);
+    const configurePrefix = '/.configure';
 
-    if (url.pathname.startsWith('/local')) {
+    if (url.pathname.startsWith(configurePrefix)) {
+      event.respondWith(fetch(url.pathname.substring(configurePrefix.length) || '/'));
+    } else if ((referrer?.pathname === configurePrefix) && (url.pathname !== '/')) { // <-- tmp
+      event.respondWith(fetch(url.pathname));
+    } else {
       let response = (async () => {
-        let handle = await idbKeyval.get('handle');
-        let targetPath = url.pathname.slice(7);
-        let targetHandle = await findHandle(handle, targetPath.split('/'));
-        console.log(targetHandle);
+        let config = await idbKeyval.get('config', store);
 
-        if (!targetHandle) {
-          return new Response(`File at ${targetPath} not found`, { status: 404, statusText: 'Not Found' });
+        if (!config) {
+          return Response.redirect(configurePrefix, 302);
+        }
+
+        if ((await config.handle.queryPermission()) !== 'granted') {
+          // console.log('Not granted');
+          return Response.redirect(configurePrefix, 302);
+        }
+
+        let segments = decodeURI(url.pathname).split('/').filter((segment) => segment.length > 0);
+        let targetHandle = (await findFileHandle(config.handle, segments)) ?? (await findFileHandle(config.handle, [...segments, 'index.html']));
+
+        if (!targetHandle || (targetHandle.kind !== 'file')) {
+          return new Response(`File at ${url.pathname} not found`, { status: 404, statusText: 'Not Found' });
         }
 
         let file = await targetHandle.getFile();
-
         return new Response(file);
-
-        // return new Response('<h1>Hello</h1>', {
-        //   headers: {
-        //     'Content-Type': 'text/html'
-        //   }
-        // });
       })();
 
       event.respondWith(response);
@@ -49,9 +59,11 @@ self.addEventListener('fetch', function (event) {
 });
 
 
-async function findHandle(handle, path) {
+async function findFileHandle(handle, path) {
   if (path.length < 1) {
-    return handle;
+    return (handle.kind === 'file')
+      ? handle
+      : null;
   }
 
   if (handle.kind !== 'directory') {
@@ -60,7 +72,7 @@ async function findHandle(handle, path) {
 
   for await (const entry of handle.values()) {
     if (entry.name === path[0]) {
-      return await findHandle(entry, path.slice(1));
+      return await findFileHandle(entry, path.slice(1));
     }
   }
 

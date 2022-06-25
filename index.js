@@ -1,24 +1,37 @@
-// await new Promise(())
 import * as idbKeyval from 'https://cdn.skypack.dev/idb-keyval';
 
 await navigator.serviceWorker.register('/service-worker.js', { type: 'module' });
 
-let handle = await idbKeyval.get('handle');
 
-if (!handle || ((await handle.queryPermission()) !== 'granted')) {
-  await new Promise((resolve) => {
-    document.querySelector('button').addEventListener('click', () => {
-      resolve();
-    });
-  });
+const configurePrefix = '/.configure';
 
-  await handle.requestPermission();
+if (![configurePrefix, configurePrefix + '/'].includes(location.pathname)) {
+  location.replace(configurePrefix);
 }
 
-if (!handle) {
-  handle = await window.showDirectoryPicker();
-  await idbKeyval.set('handle', handle);
-}
 
-window.handle = handle;
-console.log(handle);
+const store = idbKeyval.createStore('_static-server', 'store');
+
+let button = document.querySelector('button');
+let pre = document.querySelector('pre');
+
+
+let writeConfig = async () => {
+  let config = await idbKeyval.get('config', store);
+  let granted = (await config?.handle.queryPermission()) === 'granted';
+
+  pre.innerText = `Configuration: ${config ? 'active' : 'none'}` + (config ? `\nPermission: ${granted ? 'granted' : 'denied'}` : '');
+};
+
+await writeConfig();
+
+
+button.addEventListener('click', () => {
+  (async () => {
+    let handle = await window.showDirectoryPicker();
+    await idbKeyval.set('config', { handle }, store);
+    await writeConfig();
+
+    location.replace('/');
+  })();
+});
